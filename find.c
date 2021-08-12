@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+toBytes() {
+    echo "$1" | echo $(($(sed 's/.*/\L\0/;s/t/Xg/;s/g/Xm/;s/m/Xk/;s/k/X/;s/b//;s/X/ *1024/g')))
+}
+path="$1"
+if [ -z "$path" ] || [[ "$path" == -* ]]; then #check if path exist or relative/explicit
+    path="."
+fi
+if [[ "$path" != */ ]]; then
+    path="$path"/
+fi
+#all argv variable into array
+arr=("$@") #collect all data about the flags (if exist)
+for i in "${!arr[@]}"; do
+    case "${arr[$i]}" in #current word - "${arr[$i]}" , next word - "${arr[$(( $i + 1))]}"
+    "-type")
+        type="${arr[($i + 1)]}"
+        if [ -z "$type" ]; then
+            echo "search: missing argument to ${arr[$i]}"
+            exit
+        fi
+        ;;
+    "-name")
+        name="${arr[($i + 1)]}"
+        if [ -z "$name" ]; then
+            echo "search: missing argument to ${arr[$i]}"
+            exit
+        fi
+        ;;
+    "-size")
+        size="${arr[($i + 1)]}"
+        if [ -z "$size" ]; then
+            echo "search: missing argument to ${arr[$i]}"
+            exit
+        fi
+        sizeStart="="
+        if [ "${size:0:1}" = "+" ]; then
+            size=${size:1}
+            sizeStart="+"
+        fi
+        if [ "${size:0:1}" = "-" ]; then
+            size=${size:1}
+            sizeStart="-"
+        fi
+        if [ "${size: -1}" = "b" ]; then
+            size=${size::-1}
+        fi
+        if [[ "${size: -1}" =~ [0-9] ]]; then
+            size=$(echo "$size" | awk '{print $1 * 512}')    
+        fi
+        size=$(toBytes "$size")
+        ;;
+    "-maxdepth")
+        maxDepth="${arr[($i + 1)]}"
+        if [ -z "$maxDepth" ]; then
+            echo "search: missing argument to ${arr[$i]}"
+            exit
+        fi
+        ;;
+    "-exec")
+        index="$((i + 1))"
+        execCommand="${arr[*]:$index}"
+        if [ -z "$execCommand" ]; then
+            echo "search: missing argument to ${arr[$i]}"
+            exit
+        fi
+        ;;
+    esac
+done
+flag=0
+lsMaxDepth() {
+    #$1 - path, $2 - type, $3 - name, $4 - size, $5 - max
+    if [ "$5" == "0" ]; then #maximum depth - stop condition
+        return
+    fi
+    # -------------------------- loop check current item ------------------------- #
+    for item in $(ls -a "$1"); do
+        if [ "$path" = "$1" ] && [ "$flag" == "0" ] && [ -z "$3" ] && [ -z "$4" ] && [ "$2" != "f" ]; then
+            echo "$path"
+            ((flag += 1))
+        fi
+
+        if [ "$item" == "." ] || [ "$item" == ".." ]; then #handle . .. directories
+            continue
+        fi
+        # -------------------------- if this item is a file -------------------------- #
+        if [ -f "$1""$item" ]; then
+            # ----------------------- if the type flag is f or null ---------------------- #
+            if [ "$2" = "f" ] || [ -z "$2" ]; then
+                # --------------------- if both name and size are enabled -------------------- #
+                if [ -n "$3" ] && [ -n "$4" ]; then
+                    if [[ "$item" == $3 ]]; then #if item name equal to regular expression
+                        s=$(ls -l "$1""$item" | awk -v name="$1""$item" '{if( $NF == name ) print $5 }')
+                        if [ "$sizeStart" = "+" ] && [ "$s" -gt "$4" ]; then
+                            echo "$1""$item"
+                        fi
+                        if [ "$sizeStart" = "-" ] && [ "$s" -lt "$4" ]; then
+                            echo "$1""$item"
+                        fi
+                        if [ "$sizeStart" = "=" ] && [ "$s" -le "$4" ] && [ "$s" -gt "$(("$4" - 1024))" ]; then
+                            echo "$1""$item"
+                        fi
+                    fi
+                    # -------------------------- if name flag is enabled ------------------------- #
+                elif [ -n "$3" ]; then
+                    if [[ "$item" == $3 ]]; then #if item equal to regular expression
+                        echo "$1""$item"
+                    fi
+                    # -------------------------- if size flag is enabled ------------------------- #
+                elif [ -n "$4" ]; then
+                    s=$(ls -l "$1""$item" | awk -v name="$1""$item" '{if( $NF == name ) print $5 }')
+                    if [ "$sizeStart" = "+" ] && [ "$s" -gt "$4" ]; then
+                        echo "$1""$item"
+                    fi
+                    if [ "$sizeStart" = "-" ] && [ "$s" -lt "$4" ]; then
+                        echo "$1""$item"
+                    fi
+                    if [ "$sizeStart" = "=" ] && [ "$s" -le "$4" ] && [ "$s" -gt "$(("$4" - 1024))" ]; then
+                        echo "$1""$item"
+                    fi
+                    # ------------------------ if no name and no size flag ----------------------- #
+                else
+                    echo "$1""$item"
+                fi
+            fi
+            # ------------------------ if this item is a directory ----------------------- #
+        elif [ -d "$1""$item" ]; then
+            # ----------------------- if the type flag is d or null ---------------------- #
+            if [ "$2" = "d" ] || [ -z "$2" ]; then
+                # --------------------- if both name and size are enabled -------------------- #
+                if [ -n "$3" ] && [ -n "$4" ]; then
+                    #if item name equal to regular expression
+                    if [[ "$item" == $3 ]]; then
+                        s=$(ls -l "$1" | awk -v name="$item" '{if( $NF == name ) print $5 }')
+                        if [ "$sizeStart" = "+" ] && [ "$s" -gt "$4" ]; then
+                            echo "$1""$item"
+                        fi
+                        if [ "$sizeStart" = "-" ] && [ "$s" -lt "$4" ]; then
+                            echo "$1""$item"
+                        fi
+                        if [ "$sizeStart" = "=" ] && [ "$s" -le "$4" ] && [ "$s" -gt "$(("$4" - 1024))" ]; then
+                            echo "$1""$item"
+                        fi
+                    fi
+                    lsMaxDepth "$1""$item"/ "$2" "$3" "$4" "$(($5 - 1))"
+                # ----------------------- if only name flag is enabled ----------------------- #
+                elif [ -n "$3" ]; then
+                    if [[ "$item" == $3 ]]; then #if item equal to regular expression
+                        echo "$1""$item"
+                    fi
+                    lsMaxDepth "$1""$item"/ "$2" "$3" "$4" "$(($5 - 1))"
+                # -------------------------- if size flag is enabled ------------------------- #
+                elif [ -n "$4" ]; then
+                    s=$(ls -l "$1" | awk -v name="$item" '{if( $NF == name ) print $5 }')
+                    if [ "$sizeStart" = "+" ] && [ "$s" -gt "$4" ]; then
+                        echo "$1""$item"
+                    fi
+                    if [ "$sizeStart" = "-" ] && [ "$s" -lt "$4" ]; then
+                        echo "$1""$item"
+                    fi
+                    if [ "$sizeStart" = "=" ] && [ "$s" -le "$4" ] && [ "$s" -gt "$(("$4" - 1024))" ]; then
+                        echo "$1""$item"
+                    fi
+                    lsMaxDepth "$1""$item"/ "$2" "$3" "$4" "$(($5 - 1))"
+                    # ------------------------ if no name and no size flag ----------------------- #
+                else
+                    echo "$1""$item"
+                    lsMaxDepth "$1""$item"/ "$2" "$3" "$4" "$(($5 - 1))"
+                fi
+                # ----------------------------- no "d" type flag ----------------------------- #
+            else
+                lsMaxDepth "$1""$item"/ "$2" "$3" "$4" "$(($5 - 1))"
+            fi
+        fi
+    done
+}
+if [ -z "$execCommand" ]; then
+    lsMaxDepth "$path" "$type" "$name" "$size" "$maxDepth"
+else
+    var="$(lsMaxDepth "$path" "$type" "$name" "$size" "$maxDepth")"
+    for item in $var; do #iterate on result files with exec command
+        if [ "$item" == "total 0" ]; then
+            continue
+        fi
+        $execCommand "$item"
+    done
+fi
