@@ -1,2 +1,2 @@
 # findCommand
-Kind of implementation of the FIND Unix command in C language
+Kind of implementation of the FIND Unix command in C language for Unix course
